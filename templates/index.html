@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        Media Downloader V2
+    </title>
+
+    <link
+        rel="stylesheet"
+        href="/static/style.css"
+    >
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- SIDEBAR -->
+
+    <aside class="sidebar">
+
+        <div class="brand">
+
+            <div class="brand-icon">
+                ↓
+            </div>
+
+            <div>
+                <strong>
+                    Media
+                </strong>
+
+                <span>
+                    Downloader
+                </span>
+            </div>
+
+        </div>
+
+
+        <nav>
+
+            <button
+                class="nav-item active"
+                data-page="dashboard"
+            >
+                <span>⌂</span>
+                Dashboard
+            </button>
+
+            <button
+                class="nav-item"
+                data-page="history"
+            >
+                <span>◷</span>
+                Histórico
+            </button>
+
+            <button
+                class="nav-item"
+                data-page="library"
+            >
+                <span>▣</span>
+                Biblioteca
+            </button>
+
+        </nav>
+
+
+        <div class="sidebar-bottom">
+
+            <div class="version">
+                V2.0
+            </div>
+
+            <div class="ffmpeg">
+                ● FFmpeg ativo
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- MAIN -->
+
+    <main class="main">
+
+        <!-- HEADER -->
+
+        <header class="topbar">
+
+            <div>
+
+                <h1 id="pageTitle">
+                    Dashboard
+                </h1>
+
+                <p id="pageDescription">
+                    Baixe e organize seus arquivos de mídia.
+                </p>
+
+            </div>
+
+            <div class="status-online">
+                <span></span>
+                Sistema online
+            </div>
+
+        </header>
+
+
+        <!-- DASHBOARD -->
+
+        <section
+            id="page-dashboard"
+            class="page active-page"
+        >
+
+            <!-- DOWNLOAD CARD -->
+
+            <div class="download-card">
+
+                <div class="card-title">
+
+                    <div>
+
+                        <h2>
+                            Novo download
+                        </h2>
+
+                        <p>
+                            Cole uma URL para começar.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="url-box">
+
+                    <input
+                        id="url"
+                        type="url"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        autocomplete="off"
+                    >
+
+                    <button
+                        id="infoBtn"
+                        class="inspect-button"
+                    >
+                        Analisar
+                    </button>
+
+                </div>
+
+
+                <!-- PREVIEW -->
+
+                <div
+                    id="preview"
+                    class="video-preview hidden"
+                >
+
+                    <img
+                        id="thumb"
+                        src=""
+                        alt="Thumbnail"
+                    >
+
+                    <div class="video-info">
+
+                        <h3 id="title">
+                            -
+                        </h3>
+
+                        <p id="uploader">
+                            -
+                        </p>
+
+                        <p id="duration">
+                            -
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- OPTIONS -->
+
+                <div class="options-grid">
+
+                    <div class="field">
+
+                        <label>
+                            Formato
+                        </label>
+
+                        <select id="type">
+
+                            <option value="video">
+                                🎬 Vídeo MP4
+                            </option>
+
+                            <option value="audio">
+                                🎵 Áudio MP3
+                            </option>
+
+                        </select>
+
+                    </div>
+
+
+                    <div
+                        class="field"
+                        id="qualityBox"
+                    >
+
+                        <label>
+                            Qualidade
+                        </label>
+
+                        <select id="quality">
+
+                            <option value="best">
+                                Melhor disponível
+                            </option>
+
+                            <option value="2160">
+                                2160p — 4K
+                            </option>
+
+                            <option value="1440">
+                                1440p — 2K
+                            </option>
+
+                            <option value="1080">
+                                1080p — Full HD
+                            </option>
+
+                            <option value="720">
+                                720p — HD
+                            </option>
+
+                            <option value="480">
+                                480p
+                            </option>
+
+                            <option value="360">
+                                360p
+                            </option>
+
+                        </select>
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    id="downloadBtn"
+                    class="download-button"
+                >
+                    <span>↓</span>
+                    Iniciar download
+                </button>
+
+
+                <!-- ERROR -->
+
+                <div
+                    id="error"
+                    class="error hidden"
+                ></div>
+
+            </div>
+
+
+            <!-- STATUS -->
+
+            <div
+                id="status"
+                class="task-card hidden"
+            >
+
+                <div class="task-header">
+
+                    <div>
+
+                        <span class="task-label">
+                            DOWNLOAD EM ANDAMENTO
+                        </span>
+
+                        <h3 id="statusText">
+                            Preparando...
+                        </h3>
+
+                    </div>
+
+                    <strong id="percent">
+                        0%
+                    </strong>
+
+                </div>
+
+
+                <div class="progress-track">
+
+                    <div
+                        id="bar"
+                        class="progress-bar"
+                    ></div>
+
+                </div>
+
+
+                <div class="task-details">
+
+                    <span id="speed">
+                        -
+                    </span>
+
+                    <span id="eta">
+                        -
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <!-- RESULT -->
+
+            <div
+                id="result"
+                class="success-card hidden"
+            >
+
+                <div class="success-icon">
+                    ✓
+                </div>
+
+                <div class="success-content">
+
+                    <strong>
+                        Download concluído
+                    </strong>
+
+                    <span id="filename">
+                        arquivo.mp4
+                    </span>
+
+                </div>
+
+                <a
+                    id="downloadLink"
+                    class="save-button"
+                >
+                    Salvar
+                </a>
+
+            </div>
+
+
+            <!-- STATS -->
+
+            <div class="stats-grid">
+
+                <div class="stat-card">
+
+                    <span>
+                        Downloads
+                    </span>
+
+                    <strong id="statTotal">
+                        0
+                    </strong>
+
+                </div>
+
+                <div class="stat-card">
+
+                    <span>
+                        Concluídos
+                    </span>
+
+                    <strong id="statCompleted">
+                        0
+                    </strong>
+
+                </div>
+
+                <div class="stat-card">
+
+                    <span>
+                        Arquivos
+                    </span>
+
+                    <strong id="statFiles">
+                        0
+                    </strong>
+
+                </div>
+
+                <div class="stat-card">
+
+                    <span>
+                        Armazenamento
+                    </span>
+
+                    <strong id="statStorage">
+                        0 MB
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <!-- RECENT -->
+
+            <div class="section-card">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Downloads recentes
+                        </h2>
+
+                        <p>
+                            Seus últimos downloads.
+                        </p>
+
+                    </div>
+
+                    <button
+                        id="openHistory"
+                        class="text-button"
+                    >
+                        Ver todos
+                    </button>
+
+                </div>
+
+                <div
+                    id="recentList"
+                    class="recent-list"
+                ></div>
+
+            </div>
+
+        </section>
+
+
+        <!-- HISTORY -->
+
+        <section
+            id="page-history"
+            class="page"
+        >
+
+            <div class="section-card">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Histórico
+                        </h2>
+
+                        <p>
+                            Todos os downloads realizados.
+                        </p>
+
+                    </div>
+
+                    <button
+                        id="clearHistory"
+                        class="danger-button"
+                    >
+                        Limpar histórico
+                    </button>
+
+                </div>
+
+                <div
+                    id="historyList"
+                    class="history-list"
+                ></div>
+
+            </div>
+
+        </section>
+
+
+        <!-- LIBRARY -->
+
+        <section
+            id="page-library"
+            class="page"
+        >
+
+            <div class="section-card">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Biblioteca
+                        </h2>
+
+                        <p>
+                            Arquivos armazenados localmente.
+                        </p>
+
+                    </div>
+
+                </div>
+
+                <div
+                    id="libraryList"
+                    class="library-list"
+                ></div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</div>
+
+
+<script src="/static/app.js"></script>
+
+</body>
+
+</html>
