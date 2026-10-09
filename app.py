@@ -15,19 +15,51 @@ from services.download_manager import (
     stop_queue,
 )
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Inicializa o banco de dados
     init_database()
 
+    # Recupera registros de downloads interrompidos
+    from database.database import get_connection
+
+    connection = get_connection()
+
+    try:
+        connection.execute(
+            """
+            UPDATE downloads
+            SET
+                status = ?,
+                error = ?,
+                speed = NULL,
+                eta = NULL
+            WHERE status IN (
+                'queued',
+                'starting',
+                'downloading',
+                'processing'
+            )
+            """,
+            (
+                "error",
+                "Download interrompido porque o servidor foi reiniciado.",
+            ),
+        )
+
+        connection.commit()
+
+    finally:
+        connection.close()
+
     # Inicia a fila de downloads
     await start_queue()
 
-    yield
-
-    # Para a fila quando a aplicação for encerrada
-    await stop_queue()
+    try:
+        yield
+    finally:
+        # Para a fila quando a aplicação for encerrada
+        await stop_queue()
 
 
 app = FastAPI(
