@@ -1,6 +1,8 @@
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from config import DOWNLOAD_DIR
 from database.database import (
@@ -57,6 +59,54 @@ async def download_progress(
         "speed": download["speed"],
         "eta": download["eta"],
     }
+
+
+def friendly_filename(title: str | None, extension: str) -> str:
+    """
+    Nome de arquivo amigável para o usuário, derivado do título.
+    O arquivo em disco continua nomeado pelo ID do download.
+    """
+
+    name = re.sub(r"[^\w\s.-]", "", title or "", flags=re.UNICODE)
+    name = re.sub(r"\s+", " ", name).strip(" .")[:120]
+
+    return f"{name or 'video'}{extension}"
+
+
+@router.get("/{download_id}/file")
+async def download_file(
+    download_id: str,
+):
+    download = get_download(download_id)
+
+    if download is None or download["status"] != "completed":
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo não disponível.",
+        )
+
+    base_dir = DOWNLOAD_DIR.resolve()
+    file_path = Path(download["filepath"] or "").resolve()
+
+    try:
+        file_path.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo não disponível.",
+        )
+
+    if not file_path.is_file():
+        # Já removido pela limpeza automática.
+        raise HTTPException(
+            status_code=404,
+            detail="Arquivo não disponível.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        filename=friendly_filename(download["title"], file_path.suffix),
+    )
 
 
 @router.delete("/{download_id}")

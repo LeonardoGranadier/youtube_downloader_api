@@ -36,5 +36,41 @@ def get_max_concurrent_downloads() -> int:
 
 MAX_CONCURRENT_DOWNLOADS = get_max_concurrent_downloads()
 
+
+def get_positive_int(name: str, default: int) -> int:
+    """
+    Lê um inteiro positivo do ambiente, usando o padrão
+    se o valor estiver ausente ou for inválido.
+    """
+
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+    if value < 1:
+        return default
+
+    return value
+
+
+# Limites por download
+MAX_DURATION_SECONDS = get_positive_int("MAX_DURATION_SECONDS", 1800)
+MAX_FILESIZE_MB = get_positive_int("MAX_FILESIZE_MB", 500)
+
+# Tempo que um arquivo pronto fica disponível antes da limpeza
+FILE_TTL_MINUTES = get_positive_int("FILE_TTL_MINUTES", 60)
+CLEANUP_INTERVAL_SECONDS = get_positive_int("CLEANUP_INTERVAL_SECONDS", 300)
+
+# Sites permitidos: domínio -> extratores do yt-dlp que podem ser usados.
+# Somente extratores específicos; o extrator "generic" (que aceita
+# qualquer URL) nunca é liberado, para evitar SSRF.
+# Vimeo ficou de fora: o yt-dlp passou a exigir conta logada (testado
+# em 2026-10-09). YouTube bloqueia IPs de datacenter (Railway).
+ALLOWED_SITES = {
+    "archive.org": ["archive.org"],
+    "wikimedia.org": ["wikimedia.org"],
+}
+
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)

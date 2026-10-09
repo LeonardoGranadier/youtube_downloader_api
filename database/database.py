@@ -200,3 +200,25 @@ def delete_download(download_id: str) -> bool:
     connection.close()
 
     return cursor.rowcount > 0
+
+def get_expired_downloads(cutoff: str) -> list[str]:
+    """
+    IDs de downloads finalizados (concluídos ou com erro)
+    antes do instante informado (ISO 8601, UTC).
+    """
+
+    connection = get_connection()
+
+    rows = connection.execute(
+        """
+        SELECT id
+        FROM downloads
+        WHERE status IN ('completed', 'error')
+        AND COALESCE(completed_at, created_at) < ?
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    connection.close()
+
+    return [row["id"] for row in rows]

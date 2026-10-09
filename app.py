@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,13 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import API_PREFIX
 from database.database import init_database
 
-from api.youtube import router as youtube_router
+from api.media import router as media_router
 from api.downloads import router as downloads_router
 from api.files import router as files_router
 
 from services.download_manager import (
+    cleanup_loop,
     start_queue,
     stop_queue,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
 @asynccontextmanager
@@ -55,9 +63,14 @@ async def lifespan(app: FastAPI):
     # Inicia a fila de downloads
     await start_queue()
 
+    # Remove arquivos e registros expirados periodicamente
+    cleanup_task = asyncio.create_task(cleanup_loop())
+
     try:
         yield
     finally:
+        cleanup_task.cancel()
+
         # Para a fila quando a aplicação for encerrada
         await stop_queue()
 
@@ -91,7 +104,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(
-    youtube_router,
+    media_router,
     prefix=API_PREFIX,
 )
 

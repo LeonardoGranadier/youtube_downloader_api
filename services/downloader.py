@@ -1,23 +1,100 @@
+import logging
 from pathlib import Path
 from typing import Callable, Optional
 
 import yt_dlp
+from yt_dlp.utils import match_filter_func
 
-from config import DOWNLOAD_DIR
+from config import (
+    DOWNLOAD_DIR,
+    MAX_DURATION_SECONDS,
+    MAX_FILESIZE_MB,
+)
+from services.url_policy import (
+    MediaError,
+    get_allowed_extractors,
+    validate_media_url,
+)
 
+
+logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[dict], None]]
 
 
+# Teto de 1080p: resoluções maiores geram arquivos grandes demais
+# para um serviço público (disco e tráfego de saída).
 QUALITY_MAP = {
-    "360": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "1440": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
-    "2160": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
-    "best": "bestvideo+bestaudio/best",
+    "360": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "best": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
 }
+
+
+def _base_options() -> dict:
+    """
+    Opções de segurança comuns a toda chamada do yt-dlp.
+    """
+
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+
+        # Só os extratores dos sites permitidos; nunca o "generic".
+        "allowed_extractors": get_allowed_extractors(),
+
+        # Bloqueia transmissões ao vivo e vídeos longos demais.
+        # "<=?" deixa passar quando a duração é desconhecida.
+        "match_filter": match_filter_func(
+            f"!is_live & duration <=? {MAX_DURATION_SECONDS}"
+        ),
+
+        "max_filesize": MAX_FILESIZE_MB * 1024 * 1024,
+
+        "socket_timeout": 30,
+    }
+
+
+def _run(options: dict, url: str, download: bool) -> dict:
+    """
+    Executa o yt-dlp convertendo qualquer falha em uma
+    mensagem genérica. O detalhe técnico vai só para o log.
+    """
+
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(
+                url,
+                download=download,
+            )
+    except Exception:
+        logger.exception("Falha no yt-dlp para %s", url)
+
+        raise MediaError(
+            "Não foi possível processar este link. "
+            "Verifique se o vídeo é público e permite download."
+        )
+
+    if info is None:
+        raise MediaError("Não foi possível obter informações do vídeo.")
+
+    return info
+
+
+def _check_duration(info: dict) -> None:
+    if info.get("is_live"):
+        raise MediaError("Transmissões ao vivo não são suportadas.")
+
+    duration = info.get("duration")
+
+    if duration and duration > MAX_DURATION_SECONDS:
+        raise MediaError(
+            "Vídeo longo demais. Limite: "
+            f"{MAX_DURATION_SECONDS // 60} minutos."
+        )
 
 
 def get_video_info(url: str) -> dict:
@@ -25,23 +102,18 @@ def get_video_info(url: str) -> dict:
     Obtém informações do vídeo sem realizar o download.
     """
 
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "skip_download": True,
-    }
+    url = validate_media_url(url)
 
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(
-            url,
-            download=False,
-        )
+    options = _base_options()
+    options["skip_download"] = True
 
-    if info is None:
-        raise RuntimeError(
-            "Não foi possível obter informações do vídeo."
-        )
+    # O match_filter faria o yt-dlp pular o vídeo sem explicar o
+    # motivo; aqui a duração é validada com mensagem clara.
+    del options["match_filter"]
+
+    info = _run(options, url, download=False)
+
+    _check_duration(info)
 
     formats = info.get("formats") or []
 
@@ -51,6 +123,7 @@ def get_video_info(url: str) -> dict:
             for fmt in formats
             if fmt.get("height")
             and fmt.get("vcodec") != "none"
+            and int(fmt["height"]) <= 1080
         }
     )
 
@@ -65,198 +138,113 @@ def get_video_info(url: str) -> dict:
     }
 
 
-def _default_progress(data: dict) -> None:
+def _find_output(download_id: str, extension: str | None = None) -> Path:
     """
-    Callback padrão para progresso.
+    Localiza o arquivo final pelo ID do download.
+
+    Arquivos temporários do yt-dlp (.part, .ytdl) são ignorados.
     """
 
-    status = data.get("status")
+    pattern = f"{download_id}.{extension}" if extension else f"{download_id}.*"
 
-    if status == "downloading":
-        percent = data.get("_percent_str")
-        speed = data.get("_speed_str")
-        eta = data.get("_eta_str")
+    candidates = [
+        path
+        for path in DOWNLOAD_DIR.glob(pattern)
+        if path.is_file()
+        and path.suffix not in {".part", ".ytdl"}
+    ]
 
-        print(
-            f"Download: {percent} | "
-            f"Velocidade: {speed} | "
-            f"ETA: {eta}"
+    if not candidates:
+        # Sem arquivo e sem erro: normalmente o yt-dlp pulou o download
+        # por ultrapassar o max_filesize.
+        raise MediaError(
+            "O arquivo ultrapassa o limite de "
+            f"{MAX_FILESIZE_MB} MB ou não pôde ser baixado."
         )
 
-    elif status == "finished":
-        print("Download concluído. Processando arquivo...")
+    return max(
+        candidates,
+        key=lambda item: item.stat().st_mtime,
+    )
 
 
 def download_video(
+    download_id: str,
     url: str,
     quality: str = "best",
     progress_callback: ProgressCallback = None,
 ) -> Path:
 
     if quality not in QUALITY_MAP:
-        raise ValueError(
-            f"Qualidade inválida: {quality}"
-        )
+        raise MediaError("Qualidade inválida.")
+
+    url = validate_media_url(url)
 
     DOWNLOAD_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    callback = (
-        progress_callback
-        if progress_callback is not None
-        else _default_progress
+    options = _base_options()
+
+    options.update(
+        {
+            "format": QUALITY_MAP[quality],
+
+            # Nome pelo ID, nunca pelo título: evita que dois usuários
+            # baixando o mesmo vídeo sobrescrevam o arquivo um do outro.
+            "outtmpl": str(DOWNLOAD_DIR / f"{download_id}.%(ext)s"),
+
+            "merge_output_format": "mp4",
+
+            "progress_hooks": [progress_callback] if progress_callback else [],
+        }
     )
 
-    options = {
-        "format": QUALITY_MAP[quality],
+    info = _run(options, url, download=True)
 
-        "outtmpl": str(
-            DOWNLOAD_DIR / "%(title)s.%(ext)s"
-        ),
+    _check_duration(info)
 
-        "merge_output_format": "mp4",
-
-        "noplaylist": True,
-
-        "quiet": True,
-
-        "no_warnings": True,
-
-        "restrictfilenames": False,
-
-        "progress_hooks": [callback],
-    }
-
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(
-            url,
-            download=True,
-        )
-
-        if info is None:
-            raise RuntimeError(
-                "O yt-dlp não retornou informações do vídeo."
-            )
-
-        filename = ydl.prepare_filename(info)
-
-    path = Path(filename)
-
-    # Quando vídeo e áudio são mesclados pelo FFmpeg,
-    # o arquivo final normalmente será MP4.
-    if path.suffix.lower() != ".mp4":
-
-        possible_mp4 = path.with_suffix(".mp4")
-
-        if possible_mp4.exists():
-            path = possible_mp4
-
-    if not path.exists():
-
-        title = info.get("title")
-
-        if title:
-            candidates = list(
-                DOWNLOAD_DIR.glob(
-                    f"{title}.*"
-                )
-            )
-
-            if candidates:
-                path = max(
-                    candidates,
-                    key=lambda item: item.stat().st_mtime,
-                )
-
-    if not path.exists():
-        raise FileNotFoundError(
-            "O download terminou, mas o arquivo final "
-            "não foi localizado."
-        )
-
-    return path
+    return _find_output(download_id)
 
 
 def download_audio(
+    download_id: str,
     url: str,
     progress_callback: ProgressCallback = None,
 ) -> Path:
 
+    url = validate_media_url(url)
+
     DOWNLOAD_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    callback = (
-        progress_callback
-        if progress_callback is not None
-        else _default_progress
+    options = _base_options()
+
+    options.update(
+        {
+            # Sem trilha de áudio separada, baixa um vídeo pequeno só
+            # para extrair o áudio, nunca o de maior resolução.
+            "format": "bestaudio/best[height<=480]/best",
+
+            "outtmpl": str(DOWNLOAD_DIR / f"{download_id}.%(ext)s"),
+
+            "progress_hooks": [progress_callback] if progress_callback else [],
+
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
+        }
     )
 
-    options = {
-        "format": "bestaudio/best",
+    info = _run(options, url, download=True)
 
-        "outtmpl": str(
-            DOWNLOAD_DIR / "%(title)s.%(ext)s"
-        ),
+    _check_duration(info)
 
-        "noplaylist": True,
-
-        "quiet": True,
-
-        "no_warnings": True,
-
-        "restrictfilenames": False,
-
-        "progress_hooks": [callback],
-
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }
-        ],
-    }
-
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(
-            url,
-            download=True,
-        )
-
-        if info is None:
-            raise RuntimeError(
-                "O yt-dlp não retornou informações do áudio."
-            )
-
-        filename = ydl.prepare_filename(info)
-
-    original_path = Path(filename)
-
-    mp3_path = original_path.with_suffix(".mp3")
-
-    if mp3_path.exists():
-        return mp3_path
-
-    title = info.get("title")
-
-    if title:
-        candidates = list(
-            DOWNLOAD_DIR.glob(
-                f"{title}.mp3"
-            )
-        )
-
-        if candidates:
-            return max(
-                candidates,
-                key=lambda item: item.stat().st_mtime,
-            )
-
-    raise FileNotFoundError(
-        "O áudio foi processado, mas o arquivo MP3 "
-        "não foi localizado."
-    )
+    return _find_output(download_id, "mp3")
