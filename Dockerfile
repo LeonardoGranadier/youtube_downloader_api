@@ -18,5 +18,7 @@ RUN useradd --create-home appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
+# Host vazio: escuta em IPv4 e IPv6 (a rede privada do Railway pode
+# usar IPv6). "::" sozinho no uvicorn escuta só IPv6 — testado.
 # O Railway define PORT; 8000 é o padrão local
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app:app --host \"\" --port ${PORT:-8000}"]
