@@ -1,4 +1,6 @@
-FROM python:3.13-slim
+# Imagem base pelo espelho público da AWS (mesma imagem oficial do Docker
+# Hub): o builder do Railway levou 429 do Docker Hub em 2026-10-09.
+FROM public.ecr.aws/docker/library/python:3.13-slim
 
 # FFmpeg: junta vídeo + áudio e converte para MP3
 RUN apt-get update \
