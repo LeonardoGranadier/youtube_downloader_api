@@ -12,7 +12,7 @@ from schemas.media import (
 
 from services.downloader import get_video_info
 from services.download_manager import create_download
-from services.url_policy import MediaError, get_allowed_domains
+from services.url_policy import MediaError
 
 
 router = APIRouter(
@@ -20,13 +20,6 @@ router = APIRouter(
     tags=["Media"],
     dependencies=[Depends(require_api_key)],
 )
-
-
-@router.get("/sites")
-async def media_sites():
-    return {
-        "domains": get_allowed_domains(),
-    }
 
 
 @router.post(

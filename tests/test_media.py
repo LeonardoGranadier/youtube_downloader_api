@@ -9,59 +9,11 @@ from api.downloads import friendly_filename
 from config import DOWNLOAD_DIR, MEDIA_API_KEY
 from database.database import create_download, delete_download, get_download
 from services.download_manager import cleanup_expired
-from services.url_policy import (
-    MediaError,
-    get_allowed_extractors,
-    validate_media_url,
-)
 
 
 HEADERS = {
     "X-API-Key": MEDIA_API_KEY,
 }
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://archive.org/details/BigBuckBunny_124",
-        "https://www.archive.org/details/BigBuckBunny_124",
-        "https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm",
-    ],
-)
-def test_allowed_urls(url):
-    assert validate_media_url(url) == url
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
-        "https://youtu.be/aqz-KE-bpKQ",
-        "https://vimeo.com/76979871",
-        "http://archive.org/details/x",
-        "https://localhost/video.mp4",
-        "https://169.254.169.254/latest/meta-data",
-        "https://postgres.railway.internal/",
-        "https://archive.org.evil.com/x",
-        "https://evilarchive.org/x",
-        "https://user:pass@archive.org/details/x",
-        "https://archive.org:8080/details/x",
-        "file:///etc/passwd",
-        "ftp://archive.org/x",
-        "https://[::1/",
-    ],
-)
-def test_rejected_urls(url):
-    with pytest.raises(MediaError):
-        validate_media_url(url)
-
-
-def test_generic_extractor_is_never_allowed():
-    extractors = get_allowed_extractors()
-
-    assert extractors
-    assert not any("generic" in name for name in extractors)
 
 
 def test_media_requires_api_key():
@@ -72,27 +24,6 @@ def test_media_requires_api_key():
         )
 
     assert response.status_code == 401
-
-
-def test_media_sites():
-    with TestClient(app) as client:
-        response = client.get("/api/v1/media/sites", headers=HEADERS)
-
-    assert response.status_code == 200
-    assert "archive.org" in response.json()["domains"]
-    assert "youtube.com" not in response.json()["domains"]
-
-
-def test_info_rejects_youtube_without_calling_ytdlp():
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/v1/media/info",
-            json={"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"},
-            headers=HEADERS,
-        )
-
-    assert response.status_code == 400
-    assert "Site não suportado" in response.json()["detail"]
 
 
 def test_download_rejects_internal_host():

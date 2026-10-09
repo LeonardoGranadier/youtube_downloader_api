@@ -1,18 +1,16 @@
 # Mil1Utilidades Media API
 
-API em Python (FastAPI + yt-dlp + FFmpeg) para baixar vídeos/áudios de sites com conteúdo de licença livre, usada pelo Mil1 Utilidades.
+API em Python (FastAPI + yt-dlp + FFmpeg) para baixar vídeos/áudios a partir de um link, usada pelo Mil1 Utilidades.
 
-## Sites permitidos
+## Sites aceitos
 
-Somente domínios da lista `ALLOWED_SITES` em `config.py` (hoje: `archive.org` e `wikimedia.org`). O extrator genérico do yt-dlp nunca é liberado, o que impede o servidor de acessar URLs arbitrárias (SSRF).
+Qualquer site que o yt-dlp consiga baixar, e links diretos de arquivo (`.mp4`, `.webm`...), via http/https. Nada é contornado: sem cookies, contas ou proxies; se o site bloquear (ex.: YouTube bloqueia IPs de datacenter, testado no Railway em 2026-10-09), o download falha. Respeitar os termos de cada plataforma e a licença de cada obra é responsabilidade de quem baixa (decisão registrada no ADR-071 do Mil1).
 
-- **YouTube**: fora da lista. Bloqueia IPs de datacenter (testado no Railway em 2026-10-09: "Sign in to confirm you're not a bot").
-- **Vimeo**: fora da lista. O yt-dlp passou a exigir conta logada.
+**Proteção contra SSRF** (`services/net_guard.py`): toda resolução de nome do processo só devolve endereços públicos. Isso cobre redirecionamentos, fragmentos HLS/DASH e DNS rebinding, não só a URL inicial. Só protocolos baixados em Python (sem RTMP/RTSP via FFmpeg).
 
 ## Endpoints (todos exigem o cabeçalho `X-API-Key`)
 
-- `GET /api/v1/media/sites`: domínios aceitos
-- `POST /api/v1/media/info` `{ "url" }`: título, duração e resoluções
+- `POST /api/v1/media/info` `{ "url" }`: título, duração, miniatura, resoluções (`available_heights`) e `has_video` (link direto sem resolução conhecida vem com `[]` e `true`, e baixa o original)
 - `POST /api/v1/media/download` `{ "url", "media_type": "video"|"audio", "quality": "best" | altura exata, ex.: "360" }`: `202` com `{ "id" }`. A altura precisa estar em `available_heights` do `/media/info` (até 1080p). O vídeo sempre sai com som: se a versão escolhida for muda (conferido com `ffprobe` no arquivo real), o áudio de outra versão é juntado com FFmpeg, sem recodificar o vídeo.
 - `GET /api/v1/downloads/{id}/progress`: status e progresso
 - `GET /api/v1/downloads/{id}/file`: arquivo final (quando `completed`)

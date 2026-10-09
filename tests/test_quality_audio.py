@@ -14,21 +14,22 @@ HEADERS = {
     "X-API-Key": MEDIA_API_KEY,
 }
 
-# Formatos reais do Wikimedia Commons (Big_Buck_Bunny_4K.webm, 2026-10-09):
+# Formatos reais do Wikimedia Commons (Big_Buck_Bunny_4K.webm, 2026-10-09;
+# o yt-dlp sempre preenche "protocol", conferido com -j):
 # o 360p é o único sem áudio.
 WIKIMEDIA_FORMATS = [
-    {"format_id": "0", "height": 240, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 30_000_000},
-    {"format_id": "1", "height": 360, "vcodec": "mp4v", "acodec": "none", "filesize_approx": 130_000_000},
-    {"format_id": "2", "height": 480, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 96_000_000},
-    {"format_id": "3", "height": 1080, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 300_000_000},
-    {"format_id": "4", "height": 2250, "vcodec": "vp8", "acodec": "vorbis", "filesize_approx": 2_900_000_000},
+    {"format_id": "0", "protocol": "https", "height": 240, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 30_000_000},
+    {"format_id": "1", "protocol": "https", "height": 360, "vcodec": "mp4v", "acodec": "none", "filesize_approx": 130_000_000},
+    {"format_id": "2", "protocol": "https", "height": 480, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 96_000_000},
+    {"format_id": "3", "protocol": "https", "height": 1080, "vcodec": "vp9", "acodec": "opus", "filesize_approx": 300_000_000},
+    {"format_id": "4", "protocol": "https", "height": 2250, "vcodec": "vp8", "acodec": "vorbis", "filesize_approx": 2_900_000_000},
 ]
 
 # archive.org informa codecs desconhecidos (sem "acodec"/"vcodec" úteis).
 ARCHIVE_FORMATS = [
-    {"format_id": "0", "height": 300, "ext": "ogv", "filesize": 46_000_000},
-    {"format_id": "1", "height": 360, "ext": "mp4", "filesize": 61_000_000},
-    {"format_id": "2", "height": 720, "ext": "avi", "filesize": 332_000_000},
+    {"format_id": "0", "protocol": "https", "height": 300, "ext": "ogv", "filesize": 46_000_000},
+    {"format_id": "1", "protocol": "https", "height": 360, "ext": "mp4", "filesize": 61_000_000},
+    {"format_id": "2", "protocol": "https", "height": 720, "ext": "avi", "filesize": 332_000_000},
 ]
 
 
@@ -63,7 +64,7 @@ def test_audio_donor_is_the_lightest_version_with_audio():
 
 def test_audio_donor_prefers_an_audio_only_track():
     formats = WIKIMEDIA_FORMATS + [
-        {"format_id": "a", "vcodec": "none", "acodec": "opus", "filesize_approx": 9_000_000},
+        {"format_id": "a", "protocol": "https", "vcodec": "none", "acodec": "opus", "filesize_approx": 9_000_000},
     ]
 
     assert pick_audio_donor(formats, exclude_id="1")["format_id"] == "a"
@@ -77,7 +78,7 @@ def test_audio_donor_with_unknown_codecs_falls_back_to_other_versions():
 
 
 def test_no_audio_donor_when_nothing_else_exists():
-    only_video = [{"format_id": "1", "height": 360, "vcodec": "h264", "acodec": "none"}]
+    only_video = [{"format_id": "1", "protocol": "https", "height": 360, "vcodec": "h264", "acodec": "none"}]
 
     assert pick_audio_donor(only_video, exclude_id="1") is None
 
@@ -85,14 +86,15 @@ def test_no_audio_donor_when_nothing_else_exists():
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://upload.wikimedia.org/thumb.jpg", "https://upload.wikimedia.org/thumb.jpg"),
-        ("https://archive.org/download/x/thumb.jpg", "https://archive.org/download/x/thumb.jpg"),
-        ("https://tracker.example.com/pixel.gif", None),
-        ("http://archive.org/thumb.jpg", None),
+        ("https://1.1.1.1/thumb.jpg", "https://1.1.1.1/thumb.jpg"),
+        ("http://1.1.1.1/thumb.jpg", None),
+        ("https://127.0.0.1/thumb.jpg", None),
+        ("https://169.254.169.254/x.jpg", None),
+        ("javascript:alert(1)", None),
         (None, None),
     ],
 )
-def test_thumbnail_only_from_allowed_sites_over_https(url, expected):
+def test_thumbnail_only_https_and_public(url, expected):
     assert _safe_thumbnail(url) == expected
 
 

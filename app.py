@@ -2,6 +2,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+from services import net_guard
+
+# Antes de qualquer outra coisa: toda conexão de saída do processo passa
+# a aceitar só endereços públicos (SSRF, ADR-071 do Mil1).
+net_guard.install()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

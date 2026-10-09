@@ -20,6 +20,7 @@ class MediaInfoResponse(BaseModel):
     duration: float | None = None
     webpage_url: str | None = None
     available_heights: list[int] = []
+    has_video: bool = True
 
 
 class MediaDownloadRequest(BaseModel):

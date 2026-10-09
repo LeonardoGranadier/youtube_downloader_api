@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from config import ALLOWED_SITES
+from services.net_guard import is_public_ip, resolves_to_public_only
 
 
 class MediaError(Exception):
@@ -9,31 +9,15 @@ class MediaError(Exception):
     """
 
 
-def get_allowed_domains() -> list[str]:
-    return sorted(ALLOWED_SITES.keys())
-
-
-def get_allowed_extractors() -> list[str]:
-    """
-    Lista de extratores do yt-dlp liberados, no formato
-    esperado pela opção "allowed_extractors" (regex exata).
-    """
-
-    extractors = []
-
-    for names in ALLOWED_SITES.values():
-        for name in names:
-            extractors.append(f"{name}$")
-
-    return extractors
-
-
 def validate_media_url(url: str) -> str:
     """
-    Valida a URL antes de entregá-la ao yt-dlp.
+    Validação antecipada, para responder 400 com mensagem clara antes de
+    chamar o yt-dlp. Qualquer site é aceito (ADR-071 do Mil1), desde que
+    seja http/https, sem usuário/senha, na porta padrão e apontando para
+    um endereço público.
 
-    Aceita somente HTTPS, sem usuário/senha, sem porta
-    e com domínio presente na lista de sites permitidos.
+    A proteção de verdade contra SSRF (redirecionamentos, DNS rebinding,
+    fragmentos de CDN) fica no net_guard, no nível do socket.
     """
 
     url = url.strip()
@@ -44,20 +28,31 @@ def validate_media_url(url: str) -> str:
     except ValueError:
         raise MediaError("Link inválido.")
 
-    if parts.scheme != "https":
-        raise MediaError("O link precisa começar com https://.")
+    if parts.scheme not in ("http", "https"):
+        raise MediaError("O link precisa começar com https:// ou http://.")
 
-    if parts.username or parts.password or port is not None:
+    if parts.username or parts.password:
         raise MediaError("Link inválido.")
 
-    host = (parts.hostname or "").lower().rstrip(".")
+    if port not in (None, 80, 443):
+        raise MediaError("Link inválido: porta não permitida.")
 
-    for domain in ALLOWED_SITES:
-        if host == domain or host.endswith(f".{domain}"):
-            return url
+    host = (parts.hostname or "").rstrip(".")
 
-    raise MediaError(
-        "Site não suportado. Sites aceitos: "
-        + ", ".join(get_allowed_domains())
-        + "."
-    )
+    if not host:
+        raise MediaError("Link inválido.")
+
+    # IP escrito direto no link: checado sem DNS.
+    if host.replace(".", "").isdigit() or ":" in host:
+        if not is_public_ip(host):
+            raise MediaError("Esse endereço aponta para uma rede interna e não é permitido.")
+
+        return url
+
+    if not resolves_to_public_only(host):
+        raise MediaError(
+            "Não foi possível acessar esse endereço (site inexistente "
+            "ou rede interna)."
+        )
+
+    return url

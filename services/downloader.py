@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
 import yt_dlp
 from yt_dlp.utils import match_filter_func
@@ -13,7 +14,6 @@ from config import (
 from services.ffmpeg import has_audio_stream, merge_video_audio
 from services.url_policy import (
     MediaError,
-    get_allowed_extractors,
     validate_media_url,
 )
 
@@ -27,6 +27,18 @@ ProgressCallback = Optional[Callable[[dict], None]]
 # para um serviço público (disco e tráfego de saída).
 MAX_HEIGHT = 1080
 
+# Só protocolos que o próprio yt-dlp baixa em Python, passando pela
+# proteção de rede (net_guard). RTMP/RTSP etc. seriam baixados pelo
+# FFmpeg, um processo à parte que a proteção não cobre.
+SAFE_PROTOCOLS = {
+    "http",
+    "https",
+    "m3u8",
+    "m3u8_native",
+    "http_dash_segments",
+    "http_dash_segments_generator",
+}
+
 
 def _base_options() -> dict:
     """
@@ -38,8 +50,12 @@ def _base_options() -> dict:
         "no_warnings": True,
         "noplaylist": True,
 
-        # Só os extratores dos sites permitidos; nunca o "generic".
-        "allowed_extractors": get_allowed_extractors(),
+        # Qualquer site (ADR-071 do Mil1). Sem cookies, contas ou proxies:
+        # se o site bloquear, o download falha, e é assim que tem que ser.
+
+        # HLS baixado em Python (não pelo FFmpeg), para passar pelo
+        # net_guard. Ver SAFE_PROTOCOLS.
+        "hls_prefer_native": True,
 
         # Bloqueia transmissões ao vivo e vídeos longos demais.
         # "<=?" deixa passar quando a duração é desconhecida.
@@ -108,12 +124,15 @@ def get_video_info(url: str) -> dict:
 
     info = _run(options, url, download=False)
 
+    _check_single_video(info)
     _check_duration(info)
+
+    formats = _safe_formats(info.get("formats") or [])
 
     heights = sorted(
         {
             int(fmt["height"])
-            for fmt in _video_formats(info.get("formats") or [])
+            for fmt in _video_formats(formats)
             if int(fmt["height"]) <= MAX_HEIGHT
         }
     )
@@ -126,16 +145,42 @@ def get_video_info(url: str) -> dict:
         "duration": info.get("duration"),
         "webpage_url": info.get("webpage_url"),
         "available_heights": heights,
+
+        # Link direto (ex.: arquivo .mp4) costuma vir sem altura: ainda é
+        # vídeo, só não dá para escolher resolução ("original").
+        "has_video": bool(heights) or any(_is_video(fmt) for fmt in formats),
     }
+
+
+def _check_single_video(info: dict) -> None:
+    # Página com vários vídeos (playlist, galeria): pede o link de um só.
+    if info.get("_type") in ("playlist", "multi_video") or info.get("entries") is not None:
+        raise MediaError(
+            "Esse link tem vários vídeos. Cole o link de um vídeo só."
+        )
+
+
+def _protocol(fmt: dict) -> str:
+    return fmt.get("protocol") or urlsplit(fmt.get("url") or "").scheme
+
+
+def _safe_formats(formats: list[dict]) -> list[dict]:
+    return [fmt for fmt in formats if _protocol(fmt) in SAFE_PROTOCOLS]
+
+
+def _is_video(fmt: dict) -> bool:
+    # Sem vcodec informado (link direto .mp4): conta como vídeo. Para
+    # extensões de áudio (.mp3...) o yt-dlp já preenche vcodec "none".
+    return fmt.get("vcodec") != "none"
 
 
 def _safe_thumbnail(url: str | None) -> str | None:
     """
-    A miniatura é carregada pelo navegador do usuário: só repassa se for
-    HTTPS de um dos próprios sites permitidos.
+    A miniatura é carregada pelo navegador do usuário: só repassa HTTPS
+    (evita conteúdo misto) e de endereço público.
     """
 
-    if not url:
+    if not url or not url.startswith("https://"):
         return None
 
     try:
@@ -172,6 +217,8 @@ def pick_video_format(formats: list[dict], quality: str) -> dict:
     até 1080p). Entre empates, prefere o que já tem áudio.
     """
 
+    formats = _safe_formats(formats)
+
     videos = [
         fmt
         for fmt in _video_formats(formats)
@@ -179,6 +226,17 @@ def pick_video_format(formats: list[dict], quality: str) -> dict:
     ]
 
     if not videos:
+        # Link direto sem altura informada: baixa o original.
+        unknown = [
+            fmt
+            for fmt in formats
+            if _is_video(fmt)
+            and not fmt.get("height")
+        ]
+
+        if quality == "best" and unknown:
+            return max(unknown, key=lambda fmt: (_may_have_audio(fmt), _size(fmt)))
+
         raise MediaError("Nenhuma versão de vídeo disponível até 1080p.")
 
     if quality == "best":
@@ -202,6 +260,8 @@ def pick_audio_donor(formats: list[dict], exclude_id: str) -> dict | None:
     De onde tirar o som quando o vídeo escolhido vem mudo: de preferência
     uma faixa só de áudio; senão, a versão mais leve que tenha áudio.
     """
+
+    formats = _safe_formats(formats)
 
     with_audio = [
         fmt
@@ -230,6 +290,37 @@ def pick_audio_donor(formats: list[dict], exclude_id: str) -> dict | None:
         return max(audio_only, key=_size)
 
     return min(with_audio, key=_size)
+
+
+def pick_audio_source(formats: list[dict]) -> dict:
+    """
+    De onde extrair o MP3: a melhor faixa só de áudio; sem ela, a versão
+    mais leve que tenha áudio (até 480p), nunca a de maior resolução.
+    """
+
+    formats = _safe_formats(formats)
+
+    audio_only = [
+        fmt
+        for fmt in formats
+        if fmt.get("vcodec") == "none"
+        and fmt.get("acodec") not in (None, "none")
+    ]
+
+    if audio_only:
+        return max(audio_only, key=_size)
+
+    with_audio = [fmt for fmt in formats if _may_have_audio(fmt)]
+
+    small = [fmt for fmt in with_audio if not fmt.get("height") or int(fmt["height"]) <= 480]
+
+    if small:
+        return min(small, key=_size) if any(f.get("height") for f in small) else max(small, key=_size)
+
+    if with_audio:
+        return min(with_audio, key=_size)
+
+    raise MediaError("Esse link não tem áudio para baixar.")
 
 
 def _scaled_progress(
@@ -359,9 +450,10 @@ def download_video(
 
     info = _run(options, url, download=False)
 
+    _check_single_video(info)
     _check_duration(info)
 
-    formats = info.get("formats") or []
+    formats = _safe_formats(info.get("formats") or [])
 
     video = pick_video_format(formats, quality)
     video_id = video["format_id"]
@@ -460,13 +552,22 @@ def download_audio(
         exist_ok=True,
     )
 
+    probe = _base_options()
+    probe["skip_download"] = True
+    del probe["match_filter"]
+
+    info = _run(probe, url, download=False)
+
+    _check_single_video(info)
+    _check_duration(info)
+
+    source = pick_audio_source(info.get("formats") or [])
+
     options = _base_options()
 
     options.update(
         {
-            # Sem trilha de áudio separada, baixa um vídeo pequeno só
-            # para extrair o áudio, nunca o de maior resolução.
-            "format": "bestaudio/best[height<=480]/best",
+            "format": source["format_id"],
 
             "outtmpl": str(DOWNLOAD_DIR / f"{download_id}.%(ext)s"),
 

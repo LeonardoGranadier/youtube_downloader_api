@@ -63,15 +63,6 @@ MAX_FILESIZE_MB = get_positive_int("MAX_FILESIZE_MB", 500)
 FILE_TTL_MINUTES = get_positive_int("FILE_TTL_MINUTES", 60)
 CLEANUP_INTERVAL_SECONDS = get_positive_int("CLEANUP_INTERVAL_SECONDS", 300)
 
-# Sites permitidos: domínio -> extratores do yt-dlp que podem ser usados.
-# Somente extratores específicos; o extrator "generic" (que aceita
-# qualquer URL) nunca é liberado, para evitar SSRF.
-# Vimeo ficou de fora: o yt-dlp passou a exigir conta logada (testado
-# em 2026-10-09). YouTube bloqueia IPs de datacenter (Railway).
-ALLOWED_SITES = {
-    "archive.org": ["archive.org"],
-    "wikimedia.org": ["wikimedia.org"],
-}
 
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
