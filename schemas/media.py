@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MediaInfoRequest(BaseModel):
@@ -35,7 +35,19 @@ class MediaDownloadRequest(BaseModel):
         description="video ou audio",
     )
 
-    quality: Literal["360", "480", "720", "1080", "best"] = Field(
+    # Altura exata em pixels (uma das "available_heights" de /media/info)
+    # ou "best" (a maior até 1080p). O teto é conferido no downloader.
+    quality: str = Field(
         default="best",
-        description="360, 480, 720, 1080 ou best (teto de 1080p)",
+        pattern=r"^(best|[1-9][0-9]{2,3})$",
+        description="best ou a altura exata, ex.: 360, 720, 1080",
     )
+
+    @field_validator("quality")
+    @classmethod
+    def quality_up_to_1080(cls, value: str) -> str:
+        # Recusado já na entrada (422), sem consultar o site.
+        if value != "best" and int(value) > 1080:
+            raise ValueError("Qualidade máxima: 1080p.")
+
+        return value

@@ -74,6 +74,13 @@ async def create_download(
         url,
     )
 
+    if (
+        media_type == "video"
+        and quality != "best"
+        and int(quality) not in info.get("available_heights", [])
+    ):
+        raise MediaError(f"Qualidade {quality}p não disponível para este vídeo.")
+
     create_download_record(
         download_id,
         url=url,

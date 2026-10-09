@@ -13,7 +13,7 @@ Somente domínios da lista `ALLOWED_SITES` em `config.py` (hoje: `archive.org` e
 
 - `GET /api/v1/media/sites`: domínios aceitos
 - `POST /api/v1/media/info` `{ "url" }`: título, duração e resoluções
-- `POST /api/v1/media/download` `{ "url", "media_type": "video"|"audio", "quality": "360"|"480"|"720"|"1080"|"best" }`: `202` com `{ "id" }`
+- `POST /api/v1/media/download` `{ "url", "media_type": "video"|"audio", "quality": "best" | altura exata, ex.: "360" }`: `202` com `{ "id" }`. A altura precisa estar em `available_heights` do `/media/info` (até 1080p). O vídeo sempre sai com som: se a versão escolhida for muda (conferido com `ffprobe` no arquivo real), o áudio de outra versão é juntado com FFmpeg, sem recodificar o vídeo.
 - `GET /api/v1/downloads/{id}/progress`: status e progresso
 - `GET /api/v1/downloads/{id}/file`: arquivo final (quando `completed`)
 

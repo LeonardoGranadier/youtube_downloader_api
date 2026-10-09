@@ -10,6 +10,7 @@ from config import (
     MAX_DURATION_SECONDS,
     MAX_FILESIZE_MB,
 )
+from services.ffmpeg import has_audio_stream, merge_video_audio
 from services.url_policy import (
     MediaError,
     get_allowed_extractors,
@@ -24,13 +25,7 @@ ProgressCallback = Optional[Callable[[dict], None]]
 
 # Teto de 1080p: resoluções maiores geram arquivos grandes demais
 # para um serviço público (disco e tráfego de saída).
-QUALITY_MAP = {
-    "360": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
-    "480": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-    "720": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-    "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-    "best": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-}
+MAX_HEIGHT = 1080
 
 
 def _base_options() -> dict:
@@ -115,15 +110,11 @@ def get_video_info(url: str) -> dict:
 
     _check_duration(info)
 
-    formats = info.get("formats") or []
-
     heights = sorted(
         {
             int(fmt["height"])
-            for fmt in formats
-            if fmt.get("height")
-            and fmt.get("vcodec") != "none"
-            and int(fmt["height"]) <= 1080
+            for fmt in _video_formats(info.get("formats") or [])
+            if int(fmt["height"]) <= MAX_HEIGHT
         }
     )
 
@@ -131,25 +122,193 @@ def get_video_info(url: str) -> dict:
         "id": info.get("id"),
         "title": info.get("title"),
         "uploader": info.get("uploader"),
-        "thumbnail": info.get("thumbnail"),
+        "thumbnail": _safe_thumbnail(info.get("thumbnail")),
         "duration": info.get("duration"),
         "webpage_url": info.get("webpage_url"),
         "available_heights": heights,
     }
 
 
-def _find_output(download_id: str, extension: str | None = None) -> Path:
+def _safe_thumbnail(url: str | None) -> str | None:
     """
-    Localiza o arquivo final pelo ID do download.
-
-    Arquivos temporários do yt-dlp (.part, .ytdl) são ignorados.
+    A miniatura é carregada pelo navegador do usuário: só repassa se for
+    HTTPS de um dos próprios sites permitidos.
     """
 
-    pattern = f"{download_id}.{extension}" if extension else f"{download_id}.*"
+    if not url:
+        return None
+
+    try:
+        validate_media_url(url)
+    except MediaError:
+        return None
+
+    return url
+
+
+def _video_formats(formats: list[dict]) -> list[dict]:
+    # archive.org informa vcodec "unknown": conta como vídeo se tiver altura.
+    return [
+        fmt
+        for fmt in formats
+        if fmt.get("height")
+        and fmt.get("vcodec") != "none"
+    ]
+
+
+def _may_have_audio(fmt: dict) -> bool:
+    # "none" é certeza de que não tem; "unknown"/ausente pode ter (o
+    # arquivo baixado é conferido com ffprobe depois).
+    return fmt.get("acodec") != "none"
+
+
+def _size(fmt: dict) -> float:
+    return fmt.get("filesize") or fmt.get("filesize_approx") or fmt.get("tbr") or 0
+
+
+def pick_video_format(formats: list[dict], quality: str) -> dict:
+    """
+    Escolhe o formato de vídeo na altura exata pedida ("best" = a maior
+    até 1080p). Entre empates, prefere o que já tem áudio.
+    """
+
+    videos = [
+        fmt
+        for fmt in _video_formats(formats)
+        if int(fmt["height"]) <= MAX_HEIGHT
+    ]
+
+    if not videos:
+        raise MediaError("Nenhuma versão de vídeo disponível até 1080p.")
+
+    if quality == "best":
+        target = max(int(fmt["height"]) for fmt in videos)
+    else:
+        target = int(quality)
+
+    candidates = [fmt for fmt in videos if int(fmt["height"]) == target]
+
+    if not candidates:
+        raise MediaError(f"Qualidade {target}p não disponível para este vídeo.")
+
+    return max(
+        candidates,
+        key=lambda fmt: (_may_have_audio(fmt), _size(fmt)),
+    )
+
+
+def pick_audio_donor(formats: list[dict], exclude_id: str) -> dict | None:
+    """
+    De onde tirar o som quando o vídeo escolhido vem mudo: de preferência
+    uma faixa só de áudio; senão, a versão mais leve que tenha áudio.
+    """
+
+    with_audio = [
+        fmt
+        for fmt in formats
+        if fmt.get("format_id") != exclude_id
+        and _may_have_audio(fmt)
+        and fmt.get("acodec")
+    ]
+
+    if not with_audio:
+        # Sem informação de codec (archive.org): qualquer outra versão
+        # pode ter áudio; o arquivo é conferido com ffprobe depois.
+        with_audio = [
+            fmt
+            for fmt in formats
+            if fmt.get("format_id") != exclude_id
+            and _may_have_audio(fmt)
+        ]
+
+    if not with_audio:
+        return None
+
+    audio_only = [fmt for fmt in with_audio if fmt.get("vcodec") == "none"]
+
+    if audio_only:
+        return max(audio_only, key=_size)
+
+    return min(with_audio, key=_size)
+
+
+def _scaled_progress(
+    callback: ProgressCallback,
+    start: float,
+    end: float,
+) -> Callable[[dict], None] | None:
+    """
+    Converte o progresso de uma etapa (0-100%) para a faixa start-end do
+    download inteiro. O "finished" de cada etapa é segurado: quem avisa
+    o fim é download_video, depois de todas as etapas.
+    """
+
+    if callback is None:
+        return None
+
+    def hook(data: dict) -> None:
+        if data.get("status") != "downloading":
+            return
+
+        total = data.get("total_bytes") or data.get("total_bytes_estimate")
+        done = data.get("downloaded_bytes")
+
+        if not total or done is None:
+            return
+
+        fraction = min(done / total, 1.0)
+
+        callback(
+            {
+                **data,
+                "_percent_str": f"{start + (end - start) * fraction:.1f}%",
+            }
+        )
+
+    return hook
+
+
+def _download_format(
+    download_id: str,
+    part: str,
+    url: str,
+    format_selector: str,
+    progress_hook: Callable[[dict], None] | None,
+) -> Path:
+    """
+    Baixa um formato específico para "<id>.<part>.<ext>".
+    """
+
+    options = _base_options()
+
+    options.update(
+        {
+            "format": format_selector,
+
+            # Nome pelo ID, nunca pelo título: evita que dois usuários
+            # baixando o mesmo vídeo sobrescrevam o arquivo um do outro.
+            "outtmpl": str(DOWNLOAD_DIR / f"{download_id}.{part}.%(ext)s"),
+
+            # Quando o próprio yt-dlp junta vídeo + faixa de áudio separada.
+            "merge_output_format": "mp4/mkv",
+
+            "progress_hooks": [progress_hook] if progress_hook else [],
+        }
+    )
+
+    info = _run(options, url, download=True)
+
+    _check_duration(info)
+
+    for item in info.get("requested_downloads") or []:
+        path = Path(item.get("filepath") or "")
+
+        if path.is_file():
+            return path
 
     candidates = [
         path
-        for path in DOWNLOAD_DIR.glob(pattern)
+        for path in DOWNLOAD_DIR.glob(f"{download_id}.{part}.*")
         if path.is_file()
         and path.suffix not in {".part", ".ytdl"}
     ]
@@ -162,10 +321,17 @@ def _find_output(download_id: str, extension: str | None = None) -> Path:
             f"{MAX_FILESIZE_MB} MB ou não pôde ser baixado."
         )
 
-    return max(
-        candidates,
-        key=lambda item: item.stat().st_mtime,
-    )
+    return candidates[0]
+
+
+def _check_final_size(path: Path) -> None:
+    if path.stat().st_size > MAX_FILESIZE_MB * 1024 * 1024:
+        path.unlink(missing_ok=True)
+
+        raise MediaError(
+            "O arquivo ultrapassa o limite de "
+            f"{MAX_FILESIZE_MB} MB."
+        )
 
 
 def download_video(
@@ -174,9 +340,11 @@ def download_video(
     quality: str = "best",
     progress_callback: ProgressCallback = None,
 ) -> Path:
-
-    if quality not in QUALITY_MAP:
-        raise MediaError("Qualidade inválida.")
+    """
+    Baixa o vídeo na resolução pedida e garante que ele venha com som:
+    se a versão escolhida for muda, baixa o áudio de outra versão e junta
+    com FFmpeg (sem recodificar o vídeo).
+    """
 
     url = validate_media_url(url)
 
@@ -186,26 +354,97 @@ def download_video(
     )
 
     options = _base_options()
+    options["skip_download"] = True
+    del options["match_filter"]
 
-    options.update(
-        {
-            "format": QUALITY_MAP[quality],
-
-            # Nome pelo ID, nunca pelo título: evita que dois usuários
-            # baixando o mesmo vídeo sobrescrevam o arquivo um do outro.
-            "outtmpl": str(DOWNLOAD_DIR / f"{download_id}.%(ext)s"),
-
-            "merge_output_format": "mp4",
-
-            "progress_hooks": [progress_callback] if progress_callback else [],
-        }
-    )
-
-    info = _run(options, url, download=True)
+    info = _run(options, url, download=False)
 
     _check_duration(info)
 
-    return _find_output(download_id)
+    formats = info.get("formats") or []
+
+    video = pick_video_format(formats, quality)
+    video_id = video["format_id"]
+
+    audio_only = [
+        fmt
+        for fmt in formats
+        if fmt.get("vcodec") == "none"
+        and fmt.get("acodec") not in (None, "none")
+    ]
+
+    temp_files: list[Path] = []
+    finished_sent = False
+
+    try:
+        if not _may_have_audio(video) and audio_only:
+            # Caso comum: o próprio yt-dlp junta vídeo + faixa de áudio.
+            selector = f"{video_id}+{max(audio_only, key=_size)['format_id']}"
+            video_span = (0.0, 100.0)
+        else:
+            selector = video_id
+            video_span = (0.0, 85.0)
+
+        video_path = _download_format(
+            download_id,
+            "video",
+            url,
+            selector,
+            _scaled_progress(progress_callback, *video_span),
+        )
+        temp_files.append(video_path)
+
+        result_path = video_path
+
+        if not has_audio_stream(video_path):
+            donor = pick_audio_donor(formats, exclude_id=video_id)
+
+            if donor is not None:
+                audio_path = _download_format(
+                    download_id,
+                    "audio",
+                    url,
+                    donor["format_id"],
+                    _scaled_progress(progress_callback, 85.0, 100.0),
+                )
+                temp_files.append(audio_path)
+
+                if has_audio_stream(audio_path):
+                    # Avisa o fim do download antes da junção (status
+                    # "processing" enquanto o FFmpeg trabalha).
+                    if progress_callback:
+                        progress_callback({"status": "finished"})
+                        finished_sent = True
+
+                    try:
+                        result_path = merge_video_audio(
+                            video_path,
+                            audio_path,
+                            DOWNLOAD_DIR / download_id,
+                        )
+                    except RuntimeError:
+                        logger.exception("Falha ao juntar vídeo e áudio (%s)", download_id)
+
+                        raise MediaError("Não foi possível juntar o vídeo com o áudio.")
+
+            # Sem nenhuma versão com som: o vídeo original é mudo.
+
+        if progress_callback and not finished_sent:
+            progress_callback({"status": "finished"})
+
+        if result_path == video_path:
+            final_path = DOWNLOAD_DIR / f"{download_id}{video_path.suffix}"
+            video_path.rename(final_path)
+            temp_files.remove(video_path)
+            result_path = final_path
+
+        _check_final_size(result_path)
+
+        return result_path
+
+    finally:
+        for path in temp_files:
+            path.unlink(missing_ok=True)
 
 
 def download_audio(
@@ -247,4 +486,12 @@ def download_audio(
 
     _check_duration(info)
 
-    return _find_output(download_id, "mp3")
+    path = DOWNLOAD_DIR / f"{download_id}.mp3"
+
+    if not path.is_file():
+        raise MediaError(
+            "O arquivo ultrapassa o limite de "
+            f"{MAX_FILESIZE_MB} MB ou não pôde ser baixado."
+        )
+
+    return path

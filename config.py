@@ -12,6 +12,7 @@ DATA_DIR = BASE_DIR / "data"
 DATABASE_PATH = DATA_DIR / "app.db"
 
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
+FFPROBE_PATH = os.getenv("FFPROBE_PATH", "/usr/bin/ffprobe")
 
 API_PREFIX = "/api/v1"
 # Autenticação da API
