@@ -1,6 +1,8 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+
+from security import require_api_key
 
 from schemas.youtube import (
     YouTubeInfoRequest,
@@ -15,6 +17,7 @@ from services.download_manager import create_download
 router = APIRouter(
     prefix="/youtube",
     tags=["YouTube"],
+    dependencies=[Depends(require_api_key)],
 )
 
 

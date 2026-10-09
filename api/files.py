@@ -1,20 +1,21 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from config import DOWNLOAD_DIR
+from security import require_api_key
 
 
 router = APIRouter(
     prefix="/files",
     tags=["Files"],
+    dependencies=[Depends(require_api_key)],
 )
 
 
 def get_safe_file_path(filename: str) -> Path:
     base_dir = DOWNLOAD_DIR.resolve()
-
     file_path = (DOWNLOAD_DIR / filename).resolve()
 
     try:
@@ -48,9 +49,7 @@ async def list_files():
 
 
 @router.get("/{filename}")
-async def get_file(
-    filename: str,
-):
+async def get_file(filename: str):
     file_path = get_safe_file_path(filename)
 
     if not file_path.exists() or not file_path.is_file():
@@ -66,9 +65,7 @@ async def get_file(
 
 
 @router.delete("/{filename}")
-async def delete_file(
-    filename: str,
-):
+async def delete_file(filename: str):
     file_path = get_safe_file_path(filename)
 
     if not file_path.exists() or not file_path.is_file():

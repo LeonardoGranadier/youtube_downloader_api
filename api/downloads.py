@@ -1,13 +1,20 @@
-from fastapi import APIRouter, HTTPException
-
 from pathlib import Path
-from config import DOWNLOAD_DIR
 
-from database.database import (get_download, get_downloads, delete_download,)
+from fastapi import APIRouter, Depends, HTTPException
+
+from config import DOWNLOAD_DIR
+from database.database import (
+    get_download,
+    get_downloads,
+    delete_download,
+)
+from security import require_api_key
+
 
 router = APIRouter(
     prefix="/downloads",
     tags=["Downloads"],
+    dependencies=[Depends(require_api_key)],
 )
 
 
@@ -51,6 +58,7 @@ async def download_progress(
         "eta": download["eta"],
     }
 
+
 @router.delete("/{download_id}")
 async def delete_download_item(
     download_id: str,
@@ -64,11 +72,11 @@ async def delete_download_item(
         )
 
     if download["status"] in {
-    "queued",
-    "starting",
-    "downloading",
-    "processing",
-}:
+        "queued",
+        "starting",
+        "downloading",
+        "processing",
+    }:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -77,24 +85,29 @@ async def delete_download_item(
             ),
         )
 
-    # Remove o arquivo físico, se existir
+    # Remove o arquivo físico, se existir.
     filepath = download.get("filepath")
+
     if filepath:
         base_dir = DOWNLOAD_DIR.resolve()
         file_path = Path(filepath).resolve()
 
-    try:
-        file_path.relative_to(base_dir)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Caminho de arquivo fora da pasta de downloads.",
-        )
+        # Impede a exclusão de arquivos fora da pasta permitida.
+        try:
+            file_path.relative_to(base_dir)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Caminho de arquivo fora "
+                    "da pasta de downloads."
+                ),
+            )
 
-    if file_path.exists() and file_path.is_file():
-        file_path.unlink()
+        if file_path.exists() and file_path.is_file():
+            file_path.unlink()
 
-    # Remove o registro do banco
+    # Remove o registro do banco de dados.
     deleted = delete_download(download_id)
 
     if not deleted:
